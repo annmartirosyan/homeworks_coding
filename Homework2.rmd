@@ -1,0 +1,472 @@
+---
+title: "CSE 270 Sports Analytics"
+subtitle: "Homework 2"
+author: "Name: Anna Martirosyan"
+date: "19.10.2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+library(SportsAnalytics270)
+library(dplyr)
+library(ggplot2)
+library(elo)
+library(VGAM)
+library(BradleyTerry2)
+```
+
+# Poisson Regression
+
+## Problem 1(20 points)
+
+### Predicting football games using Poisson regression.
+
+1. Make predictions for the same game from the same league assigned to you in 
+homework 1, but now use the poisson regression model instead of distributions.
+**(8 points)**
+
+```{r, echo=TRUE}
+data("f_data_sm")
+df = f_data_sm %>% mutate(FTAG = ifelse(FTAG>=4, "4+", FTAG),
+                           FTHG = ifelse(FTHG >=4, "4+", FTHG))
+table(Away=df$FTAG, Home = df$FTHG)
+
+df %>% filter(SEASON==2022) %>% group_by(COUNTRY) %>%
+  summarise(pvalue=chisq.test(table(FTAG, FTHG),
+                              simulate.p.value=T)$p.value)
+ 
+turkey = f_data_sm %>%
+            filter(COUNTRY=="Turkey") %>%
+            select(HOMETEAM, AWAYTEAM, FTHG, FTAG)
+
+turk1=data.frame(turkey[,c("HOMETEAM", "AWAYTEAM", "FTHG")], Home=1)
+turk2=data.frame(turkey[,c("AWAYTEAM", "HOMETEAM", "FTAG")], Home=0)
+colnames(turk1)=c("Team", "Opponent", "Goal", "Home")
+colnames(turk2)=c("Team", "Opponent","Goal", "Home")
+turkey2=rbind(turk1, turk2)
+
+model=glm(Goal~Team+Opponent+Home, data=turkey2, family=poisson(link=log))
+
+options(scipen=1, digits=4)
+erzurum_average <- predict(model, data.frame(Home=1, Team="Erzurum BB",
+                                              Opponent="Denizlispor"), 
+                            type="response")
+options(scipen=1, digits=4)
+denizlispor_average <- predict(model, data.frame(Home=0, Team="Denizlispor",
+                                             Opponent="Erzurum BB"), 
+                                type="response")
+
+# After calculating the expected (average) number of goals for both teams 
+# we can see that expected number of goals of Erzurum BB (1.431) is higher than 
+# the expected (average) number of goals of Denizlispor (1.084). Therefore, 
+# chances of Erzurum BB winning are higher.
+
+options(scipen=1, digits=4)
+intercept <- coefficients(model)["(Intercept)"]
+
+team_erzurum <- coefficients(model)["TeamErzurum BB"]
+oponnent_denizlispor <- coefficients(model)["OpponentDenizlispor"]
+ 
+home_coeff <- coefficients(model)["Home"]
+
+erzurum_h=exp(intercept + team_erzurum + oponnent_denizlispor + home_coeff)  
+denizlispor_a=exp(intercept + team_erzurum + oponnent_denizlispor)
+erzurum_h/denizlispor_a
+
+###### As we have lambda for both teams, we can use skellam distribution to   ####### 
+######               come up with the probabilities.                     #######
+
+set.seed(1)
+k = rskellam(10000,mu1 = erzurum_average, mu2 = denizlispor_average)
+
+ggplot()+geom_bar(aes(x=k))+labs(x="Goal difference", 
+     title="Skellam distribution for Erzurum BB vs Denizlispor")
+ 
+
+(denizlispor_win = sum(dskellam(c(-100:-1),erzurum_average, denizlispor_average)))
+(draw = sum(dskellam(0 ,erzurum_average, denizlispor_average)))
+(erzurum_win = sum(dskellam(c(1:100),erzurum_average, denizlispor_average)))
+
+```
+
+2. Interpret the result and compare with the betting odds from homework 1.  
+Is the same team expected to win ? **(2 points)**
+
+```{r, echo = TRUE}
+# The results that I got from Poisson Regression model and distribution approach
+# are quite different. Using distribution approach I got that the expected 
+# winner is Denizlispor with the following probabilities:
+
+# Erzurum BB wins - 0.3245
+# Denizlispor wins - 0.3706
+# Draw - 0.3049
+
+# But while using the Poisson regression approach I got the opposite result. In 
+# this case instead of Denizlispor the expected winner is Erzurum BB with 
+# following probabilities:
+
+# Erzurum BB wins - 0.4498
+# Denizlispor wins - 0.286
+# Draw - 0.2642
+
+```
+
+3. Define a metric to calculate the efficiency of the predictions. 
+**(5 points)**
+
+```{r, echo = TRUE}
+nfl_games_train =f_data_sm %>% filter(SEASON != "2022") 
+nfl_games_test <- f_data_sm %>% filter(SEASON == "2022")
+
+get_poisson_form <- function(data, country ){
+  nfl_home <- data %>% 
+    filter(COUNTRY == country) %>%
+    group_by(HOMETEAM) %>%
+    mutate(TEAM = as.factor(HOMETEAM),
+           OPPONENT = as.factor(AWAYTEAM), 
+           GOAL = FTHG,
+           HOME = 1) %>%
+    ungroup() %>%
+    select(TEAM, OPPONENT, GOAL, HOME)
+  nfl_away <- data %>% 
+    filter(COUNTRY == country) %>%
+    group_by(AWAYTEAM) %>%
+    mutate(TEAM = as.factor(AWAYTEAM),
+           OPPONENT = as.factor(HOMETEAM), 
+           GOAL = FTAG,
+           HOME = 0) %>%
+    ungroup() %>%
+    select(TEAM, OPPONENT, GOAL, HOME)
+  return(rbind(nfl_home, nfl_away)) }
+
+nfl_train_poisson <- get_poisson_form(nfl_games_train, "Turkey") 
+nfl_test_poisson <- get_poisson_form(nfl_games_test, "Turkey")
+
+nfl_model_poisson <- glm(GOAL~TEAM+OPPONENT+HOME, data=nfl_train_poisson, 
+                         family=poisson(link=log))
+
+nfl_model_poisson$xlevels[["TEAM"]] <- 
+  union(nfl_model_poisson$xlevels[["TEAM"]], levels(nfl_test_poisson$TEAM))
+nfl_model_poisson$xlevels[["OPPONENT"]] <- 
+  union(nfl_model_poisson$xlevels[["OPPONENT"]], levels(nfl_test_poisson$TEAM))
+
+nfl_test_poisson$P.G <- predict(nfl_model_poisson, 
+                                nfl_test_poisson, 
+                                type = "response")
+predict(nfl_model_poisson, data.frame(TEAM = "Erzurum BB", 
+                                     OPPONENT = "Denizlispor",
+                                     HOME = 1, 
+                                     type = "response"))
+
+rmse = sqrt(mean((nfl_test_poisson$GOAL - nfl_test_poisson$P.G)^2))
+rmse
+# Lower values of RMSE indicate better fit
+# RMSE for my model is 1.261
+```
+
+4. Find the under estimated and over estimated teams based on Poisson model. 
+**(5 points)**
+
+```{r, echo=TRUE}
+underestimated_nfl_teams <- nfl_test_poisson %>%
+  filter(GOAL < P.G)
+underestimated_nfl_teams
+
+overestimated_nfl_teams <-nfl_test_poisson %>%
+  filter(GOAL > P.G)
+overestimated_nfl_teams
+
+```
+
+
+# Bradley terry model
+
+## Problem 2(30 points)
+
+### Construct Bradley-Terry model for NBA regular season games.
+
+
+1. Load the dataset **nba2009_2021** from the package **SportsAnalytics270** 
+and remove the game Boston Celtics vs Indiana Pacers by filtering the 
+**home.PTS** and **away.PTS** variables to be equal to 0.**(3 points)**
+
+```{r, echo=TRUE}
+data(nba2009_2021)
+df_2 = nba2009_2021 %>% 
+  filter(home.PTS !=0 & away.PTS!=0)
+head(df_2, n=5)
+```
+
+2. Prepare the dataset for fitting a Bradley-Terry model by adding 2 variables,
+**ht_w** and **at_w**.Assign the values of the variables to (**ht_w** = 1, 
+**at_w** = 0) if the home team won the game and (**ht_w** = 0, **at_w** = 1) if 
+the away team won the game. **(5 points)**
+
+```{r, echo=TRUE}
+df_3 = df_2 %>%
+  select(home.TEAM_NAME, away.TEAM_NAME, home.WL) %>%
+  mutate(ht_w = ifelse(home.WL=="W",1,0),
+         at_w = ifelse(home.WL=="L",1,0))
+head(df_3, n=5)
+
+```
+
+3. Convert the variables representing the home team and the away team into 
+a factor. **(2 points)**
+
+```{r, echo=TRUE}
+df_3$home.TEAM_NAME <- as.factor(df_3$home.TEAM_NAME)
+df_3$away.TEAM_NAME <- as.factor(df_3$away.TEAM_NAME)
+str(df_3)
+```
+
+4. Fit a Bradley-Terry model into the dataset to get the abilities of the 
+teams to win. **(5 points)**
+
+```{r, echo=TRUE}
+df_4 = df_3 %>%
+    group_by(home.TEAM_NAME, away.TEAM_NAME) %>%
+    summarise(ht=sum(ht_w), at=sum(at_w))
+head(df_4, n=5)
+```
+
+5. Plot the abilities of the teams. **(5 points)**
+
+```{r, echo=TRUE}
+model = BTm(cbind(ht, at), 
+            home.TEAM_NAME, 
+            away.TEAM_NAME, 
+            data=df_4, 
+            id="team_")
+coef=model$coefficients
+sort(coef, decreasing = T)
+BTabilities(model)
+abilities = as.data.frame(BTabilities(model))
+abilities$team = rownames(abilities)
+abilities = abilities[order(abilities$ability, decreasing = T),]
+
+ggplot(data=abilities, aes(x = reorder(team, ability), y = ability)) +
+  geom_bar(stat="identity") + coord_flip() +
+  labs(x="Teams", y="Ability to Win", title="Ability to win of NBA teams")
+```
+
+6. Interpret the results of the plot, which team is the best and which team 
+is the worst ? Why is the ability to win for team **Atlanta Hawks** equal 
+to 0 ? **(5 points)**
+
+
+```{r, echo=TRUE}
+# San Antonio Spurs: the strongest team 
+# Sacramento Kings : the weakest team
+# The ability to win for team Atlanta Hawks is equal to 0, because the results 
+# were calculated with respect to that team.
+```
+
+7. Make a prediction for the upcoming 3 games.  
+(Schedule can be found here: https://www.nba.com/schedule) **(5 points)**
+
+```{r, echo=TRUE}
+a_hawks=data.frame(home.TEAM_NAME=rep("Atlanta Hawks", 3), 
+                   away.TEAM_NAME=c("Cleveland Cavaliers",
+                               "New Orleans Pelicans",
+                               "Detroit Pistons"))
+
+a_hawks$home.TEAM_NAME=factor(a_hawks$home.TEAM_NAME, 
+                              levels(df_4$away.TEAM_NAME))
+a_hawks$away.TEAM_NAME=factor(a_hawks$away.TEAM_NAME, 
+                              levels(df_4$away.TEAM_NAME))
+
+a_hawks_prob = predict(model, newdata=a_hawks, level=2, type="response")
+
+(a_hawks_df = data.frame(a_hawks, 
+                         ht_w=a_hawks_prob,
+                         at_w=1-a_hawks_prob))
+```
+
+
+# Winning Percentage
+
+## Pythagorean wins for european football
+
+## Problem 3 (30 points)
+
+1. Library **SportsAnalytics270** has a function final_table. It creates final 
+league standing for the season. Use this function to create a dataframe with
+final standings of all seasons of your league. Combine seasons into 1 dataframe. 
+You need to get something like nba_east. **(10 points)**
+
+```{r, echo=TRUE}
+final_df = data.frame()
+
+for(i in unique(f_data_sm[f_data_sm$COUNTRY == "Turkey",]$SEASON)) {   
+  output = final_table(f_data_sm, "Turkey", i)
+  output$Season = i
+  final_df = rbind(final_df, output)
+}
+head(final_df, n=5)
+
+```
+
+2. Create a variable for winning percentage and goal difference. Note, as 
+there are draws in football, we are going to take draw as a half win. 
+**(2 points)**
+```{r, echo=TRUE}
+final_df$WP = 
+  as.numeric(format(round(((final_df$W + final_df$D/2)/(final_df$W+final_df$D+ 
+                                               final_df$L))*100,1), nsmall = 1))
+head(final_df, n=5)
+# The column DIFF is already the difference of GF and GA
+```
+
+
+3. Plot Goal differential against Winning Percentage with a regression line.  
+Make sure to have a title and appropriate axis labels for your plot.
+**(5 points)**
+
+```{r, echo=TRUE}
+
+library(ggthemes)
+ggplot(final_df, aes(x=DIFF, y=WP))+geom_point()+
+  geom_smooth(method = "lm", se=F)+
+  labs(x="Points differential",y="Winning percentage")+
+  scale_x_continuous(breaks = seq(-70, 70, 10))+
+  theme_stata() 
+
+```
+
+4. Interpret the plot, do you think there is a strong correlation between the 
+variables ? **(3 points)**
+
+```{r, echo=TRUE}
+# Yes, it is nearly linear correlation between Goal differential and 
+# Winning Percentage. If the points difference is near 0 the winning percentage 
+# is near 50% which is quite expected, because if the difference is 0, means 
+# the game ended up with home and away team scoring the same number of goals.
+```
+
+5. Calculate Pearson correlation coefficient for Goal differential and Winning 
+Percentage. **(2 points)**
+
+```{r, echo=TRUE}
+(cor(final_df$WP, final_df$DIFF,method = "pearson"))
+```
+
+
+6. Build a regression model to estimate the value for k from the Pythagorean 
+formula **(3 points)**
+
+```{r,  echo=TRUE}
+final_df_new = final_df %>% 
+  filter(W!=0, L!=0, GA!=0) %>% 
+  mutate(W = W + 0.5* T, L=W + 0.5* T, RATIO=GF/GA)
+
+model2 <- lm(log(W/L)~0+log(RATIO), data=final_df_new)
+summary(model2)
+
+## The estimated value of K is 0.03539 approximately 0.04
+
+```
+
+
+5. Using the estimated value for k, calculate Pythagorean Winning percentage
+and Pythagorean wins for each team. **(3 points)**
+
+```{r, echo=T}
+k = model2$coefficients[1]
+final_df = final_df %>% 
+       mutate(PWPCT = (GF ^ k / (GF^k + GA ^ k)), PW = (W + L + T) * PWPCT)
+head(final_df, 5)
+```
+
+
+6. Find over performing and under performing teams. **(2 points)**
+
+```{r, echo=TRUE}
+#over_performing <- final_df %>%
+#  filter(GOAL < P.G)
+#under_performing <- final_df %>%
+#  filter(GOAL > P.G)
+```
+
+
+# Elo Ratings
+## Problem 4 (20 points)
+### Building Elo rating model for NBA games.
+
+1. Calculate the relative Elo ratings for all the games in the nba dataset.  
+Make sure to adjust the ratings of the teams at the beginning of each season.  
+This link https://fivethirtyeight.com/features/how-we-calculate-nba-elo-ratings/ 
+shows the steps for calculating elo ratings in nba. **(10 points)**
+
+```{r, echo=TRUE}
+data(nba2009_2021)
+home_court_advantage <- 100
+k_nba <- 20
+starting_elos <- 1505
+
+calculate_elos <- function(data, home_factor, k, starting_elos){
+  relative_elos <- data.frame()
+  final_elos <- data.frame()
+  for (season in unique(nba2009_2021$SEASON_ID)){
+  seasonal_data <- data %>% 
+    filter(SEASON_ID == season)
+  season_elos <- elo.run(score(home.PTS, away.PTS) ~
+          adjust(home.TEAM_NAME, home_court_advantage) + away.TEAM_NAME,
+          data = seasonal_data, k = k,
+          initial.elos = starting_elos
+        )
+  starting_elos <-0.75 * final.elos(season_elos) + (0.25 * 1505)
+  relative_elos <- rbind(relative_elos,
+                            data.frame(season_elos, SEASON_ID = season))
+  final_elos_df <- data.frame(season = season, 
+                              team_abr = names(starting_elos), 
+                              elo = starting_elos)
+  final_elos <- rbind(final_elos, final_elos_df)
+ 
+  }
+  return (list(final_elos=final_elos, relative_elos=relative_elos))
+}
+
+nba_relative_elos <- calculate_elos(nba2009_2021, home_court_advantage, k_nba, 
+                                    starting_elos)$relative_elos
+nba_final <- calculate_elos(nba2009_2021, home_court_advantage, k_nba, 
+                            starting_elos)$final_elos
+nba_relative_elos$Predicted <- ifelse(nba_relative_elos$p.A > 0.5, 1,0)
+head(nba_relative_elos, n=5)
+```
+
+2. Interpret the predictive power of your model using either confusion matrix 
+or brier score. **(5 points)**
+
+```{r, echo=TRUE}
+library(caret)
+calculate_brier <- function(data){ 
+  diff <- data$p.A - data$wins.A 
+  accuracy <- sum(diffˆ2) / nrow(data) 
+  return(accuracy)
+}
+(caret::confusionMatrix(data = factor(nba_relative_elos$Predicted), 
+                        reference = factor(nba_relative_elos$wins.A)))
+```
+
+3. Make predictions for the same games you chose in **Problem 2.7**, but now 
+use Elo rating model.  **(3 points)**
+
+```{r, echo=TRUE}
+teams = nba_final %>% 
+  filter(team_abr == "Atlanta Hawks" & season=="2021")
+teams
+```
+
+4. Compare the results **(2 points)**
+
+```{r, echo=TRUE}
+```
+
+5. Try to play with the home advantage parameter, K value or anything else, 
+either on football data or in nba and check if that will help to improve your 
+models' predictive power.  **(Bonus question 10 points)**
+
+```{r}
+```

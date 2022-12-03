@@ -1,0 +1,242 @@
+---
+title: "CSE 270 Sports Analytics"
+subtitle: "Homework 3"
+author: "Name: Anna Martirosyan"
+date: "11.11.2022"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+library(SportsAnalytics270)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(nnet)
+```
+
+# Competitive Balance
+
+## Problem 1 (50 points)
+
+### Noll-Scully number
+
+1. Get the final tables for all countries in the dataset *f_data_sm* for all 
+seasons(for each country). (10 points)
+
+```{r, echo=TRUE}
+final_df = data.frame()
+data(f_data_sm)
+for (j in  unique(f_data_sm$COUNTRY)){
+  for(i in unique(f_data_sm[f_data_sm$COUNTRY == j,]$SEASON)) {   
+    output = final_table(f_data_sm, j, i)
+    output$Season = i
+    output$Country = j
+    final_df = rbind(final_df, output)
+  }}
+
+head(final_df, n=5)
+```
+
+2. Calculate the wining percentage(ratio) for all the teams in all seasons. 
+(Consider draws as half wins).  (2 points)
+
+```{r, echo=TRUE}
+final_df$WP = as.numeric(format(
+  round(((final_df$W + final_df$D/2)/(final_df$W+final_df$D+final_df$L))*100, 
+                           1), nsmall = 1))
+head(final_df,n=5)
+```
+
+3. Calculate the Noll-Scully number for each season and country using the 
+winning ratio. (3 points)
+
+```{r, echo=TRUE}
+id_s = 0.5/sqrt(16)
+final_df$WR = as.numeric(format(
+  round(((final_df$W + final_df$D/2)/(final_df$W+final_df$D+final_df$L)), 
+                           3), nsmall = 1))
+final_dff<- final_df %>%
+   group_by(Season, Country) %>%
+   summarise(NS=sd(WR)/id_s)
+
+head(final_dff, n=10)
+```
+
+4. Visualize the results grouped by seasons and countries. Make sure to include
+meaningful title and axis names.  (You can use facets)  (10 points)
+
+```{r, echo=TRUE}
+ggplot(final_dff, aes(Season, NS))+
+  geom_bar(stat = "identity")+
+  facet_wrap(~Country,scales = "free")+
+  ylab("Noll-Skully number")+
+  ylim(0, 2)+
+  scale_x_continuous(breaks = seq(1994, 2022, 9))+
+  ggtitle("Noll-Skully number by SEASON and COUNTRY")
+
+```
+
+5.Interpret the visualization (5 points)
+```{r, echo=TRUE}
+
+ggplot(final_dff, aes(Season, NS))+
+  geom_bar(stat = "identity")+
+  facet_wrap(~Country,scales = "free")+
+  ylab("Noll-Skully number")+
+  ylim(0, 2)+
+  scale_x_continuous(breaks = seq(1994, 2022, 9))+
+  ggtitle("Noll-Skully number by SEASON and COUNTRY")+
+  geom_hline(yintercept=1, col="red", size=0.5)
+
+# To my interpretation I added also the below graph, with line passing through
+# y=1 to clearly show that if the number is above 1.0 it means the teams are 
+# further away in wins than we would expect given the ideal. If the number is 
+# below 1.0, it means the  teams are closer in wins than we would expect.
+# Higher is the number, lower is Competitive Balance. Closer is the number to 
+# 1, higher is Competitive Balance.
+# As we can see from the visualizations in our case for most Countries 
+# Noll-Skully number is below 1, which means that the  teams are closer in wins 
+# than we would expect.
+
+```
+
+
+
+### C5 competitive balance 
+
+6.Calculate the C5 index for the number of goals scored by the top 5 teams in 
+each country for each season. You should use the dataset from Problem 1.1. 
+(5 points)
+
+```{r,echo=TRUE}
+
+top5 <- final_df %>%
+  group_by(Season, Country) %>%
+  filter(POSITION <6) %>%
+  summarize(TopP=sum(GF))
+
+all_teams <- final_df %>%
+  group_by(Season, Country) %>%
+  summarize(Pt=sum(GF))
+
+C5<-data.frame(Season=top5$Season,Country = top5$Country, 
+               C5=top5$TopP/all_teams$Pt)
+head(C5,n=5)
+```
+
+7. Visualize the results for all countries and seasons. (Can be the same 
+structure as in 1.4) (10 points)
+
+```{r, echo=TRUE}
+ggplot(C5, aes(Season, C5))+
+  geom_line()+
+  ylab("C5 index")+
+  ylim(0.25, 0.6)+
+  scale_x_continuous(breaks = seq(1994, 2022, 9))+
+  ggtitle("C5 index by Season and Country")+
+  facet_wrap(~Country)
+
+```
+
+8. Interpret the results (5 points)
+
+The above graphs show the proportion of championships (or points) by top 5
+teams, in other words the dominance of top 5 teams. For example from the graphs
+we can conclude that in 2003 for Portugal the points gained from top5 teams 
+were approximately 40% of total number of points earned by all teams. The 
+highest numbers can be seen in Scotland in 2011 (~ 57%) and in Greece in 2002 
+(~ 53%).
+
+# Individual Performance (50 points)
+
+## Problem 2
+
+1. Load the dataset *nba_players* from the library *SportsAnalytics270* and 
+filter it to only include seasons starting from 1992.  
+Remove the columns blanl and blank2 and drop missing values or nas. (2 points)
+
+```{r, echo=TRUE}
+library(tidyr)
+data(nba_players)
+nba_players = nba_players %>% 
+  filter(Year >= 1992)
+nba_players <- nba_players[ , ! names(nba_players) %in% c("blanl", "blank2")]  
+nba_players <- nba_players %>% drop_na()
+head(nba_players, n=6)
+
+```
+
+2. Clean the variable Pos from players with double positions, for example 
+C-PF should be turned into C.  (5 points)
+
+```{r,echo=TRUE}
+nba_players$Pos <- trimws(nba_players$Pos, whitespace = '-.*')
+head(nba_players,n=6)
+```
+
+
+3. Convert the vaiable Pos into a factor and remove the columns 
+X, Year, Player and Tm. (3 points)
+
+```{r, echo=TRUE}
+nba_players$Pos = as.factor(nba_players$Pos)
+nba_players <- nba_players[ , ! names(nba_players) %in% 
+                              c("X", "Year", "Player", "Tm")]
+head(nba_players, n=5)
+```
+
+
+4. Divide the dataset into train and test datasets. 
+(You can use dplyr or any other sampling method). (10 points)
+```{r,echo=TRUE}
+training_dataset  <- nba_players %>% dplyr::sample_frac(0.7)
+testing_dataset   <- dplyr::anti_join(nba_players, training_dataset)
+
+head(training_dataset, n=5)
+head(testing_dataset, n=5)
+```
+
+5. Build a classifier model to predict the position of the player based on 
+the playing attributes.  Use the training set for fitting the model. 
+(20 points) You can use multinomial regression for that.
+```{r, echo=TRUE}
+
+training_dataset$Pos <- relevel(training_dataset$Pos, ref = "C")
+multinom_model <- multinom(Pos ~ ., data = nba_players)
+#summary(multinom_model)
+
+(exp(coef(multinom_model)))
+head(round(fitted(multinom_model), 2))
+```
+
+
+6. Predict the position of the players for the test dataset. (5 points)
+
+```{r, echo=TRUE}
+testing_dataset$ClassPredicted <- predict(multinom_model, 
+                                          newdata = testing_dataset, "class")
+# Building classification table
+table <- table(testing_dataset$Pos, testing_dataset$ClassPredicted)
+table
+
+```
+
+7. Interpret the predictive power of the model. (5 points)
+
+```{r, echo=TRUE}
+training_dataset$ClassPredicted <- predict(multinom_model, 
+                                           newdata = training_dataset, "class")
+# Building classification table
+tab <- table(training_dataset$Pos, training_dataset$ClassPredicted)
+
+# Calculating accuracy - sum of diagonal elements divided by total observations
+round((sum(diag(tab))/sum(tab))*100,2)
+
+# My model accuracy has turned out to be 60.7% in the training dataset, which is 
+# good because as Professor Madoyan says, "if it is higher that 50%, than it is 
+# a good approximation" :)
+
+
+```
